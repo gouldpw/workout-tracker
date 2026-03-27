@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#1a1a2e">
+    <title>IronLog - Workout Tracker</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="auth-screen">
+        <div class="auth-container">
+            <h1 class="auth-logo">IronLog</h1>
+            <p class="auth-subtitle">Track your gains</p>
+
+            <div id="auth-form" class="auth-form">
+                <div class="form-group">
+                    <label for="auth-email">Email</label>
+                    <input type="email" id="auth-email" placeholder="your@email.com" autocomplete="email">
+                </div>
+                <div class="form-group">
+                    <label for="auth-password">Password</label>
+                    <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+                </div>
+                <div id="auth-error" class="auth-error hidden"></div>
+                <button id="auth-submit" class="primary-btn" onclick="handleAuth()">Sign In</button>
+                <p class="auth-switch">
+                    <span id="auth-switch-text">Don't have an account?</span>
+                    <button onclick="toggleAuthMode()" id="auth-switch-btn">Sign Up</button>
+                </p>
+            </div>
+
+            <div id="auth-loading" class="auth-loading hidden">
+                <div class="spinner"></div>
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="app" class="hidden">
+        <!-- Header -->
+        <header class="app-header">
+            <h1 id="page-title">Dashboard</h1>
+            <button id="header-action" class="header-btn hidden">
+                <span class="icon">+</span>
+            </button>
+        </header>
+
+        <!-- Main Content Area -->
+        <main id="main-content">
+            <!-- Dashboard View -->
+            <section id="dashboard-view" class="view active">
+                <div class="dashboard-stats">
+                    <div class="stat-card">
+                        <span class="stat-value" id="total-workouts">0</span>
+                        <span class="stat-label">Workouts</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="total-volume">0</span>
+                        <span class="stat-label">Total Volume (lbs)</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="total-prs">0</span>
+                        <span class="stat-label">PRs Set</span>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h2>Recent PRs</h2>
+                    <div id="recent-prs" class="pr-list">
+                        <p class="empty-state">No PRs yet. Start lifting!</p>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <h2>Planned Workouts</h2>
+                    <div id="planned-workouts" class="workout-list">
+                        <p class="empty-state">No workouts planned. Create one!</p>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-header" style="margin-bottom: 12px;">
+                        <h2 style="margin-bottom: 0;">Recent Sessions</h2>
+                        <button class="add-btn" onclick="openPastSessionForm()">+ Log Past</button>
+                    </div>
+                    <div id="recent-sessions" class="session-list">
+                        <p class="empty-state">No sessions logged yet.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Plan View -->
+            <section id="plan-view" class="view">
+                <div id="workout-templates" class="workout-list">
+                    <p class="empty-state">No workout templates. Tap + to create one!</p>
+                </div>
+            </section>
+
+            <!-- Workout Editor Modal -->
+            <section id="workout-editor" class="view modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button class="back-btn" onclick="closeWorkoutEditor()">Cancel</button>
+                        <h2 id="editor-title">New Workout</h2>
+                        <button class="save-btn" onclick="saveWorkout()">Save</button>
+                    </div>
+                    <div class="form-group">
+                        <label for="workout-name">Workout Name</label>
+                        <input type="text" id="workout-name" placeholder="e.g., Push Day A">
+                    </div>
+                    <div class="form-group">
+                        <label for="workout-date">Scheduled Date (optional)</label>
+                        <input type="date" id="workout-date">
+                    </div>
+                    <div class="section">
+                        <div class="section-header">
+                            <h3>Exercises</h3>
+                            <button class="add-btn" onclick="showExercisePicker()">+ Add</button>
+                        </div>
+                        <div id="workout-exercises" class="exercise-list">
+                            <p class="empty-state">No exercises added yet.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Exercise Picker Modal -->
+            <section id="exercise-picker" class="view modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button class="back-btn" onclick="closeExercisePicker()">Back</button>
+                        <h2>Select Exercise</h2>
+                        <button class="save-btn" onclick="openNewExerciseForm()">New</button>
+                    </div>
+                    <input type="text" id="exercise-search" placeholder="Search exercises..." oninput="filterExercises()">
+                    <div id="exercise-options" class="exercise-list"></div>
+                </div>
+            </section>
+
+            <!-- New Exercise Form -->
+            <section id="new-exercise-form" class="view modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button class="back-btn" onclick="closeNewExerciseForm()">Cancel</button>
+                        <h2>New Exercise</h2>
+                        <button class="save-btn" onclick="saveNewExercise()">Save</button>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-exercise-name">Exercise Name</label>
+                        <input type="text" id="new-exercise-name" placeholder="e.g., Bench Press">
+                    </div>
+                    <div class="form-group">
+                        <label for="new-exercise-category">Category</label>
+                        <select id="new-exercise-category">
+                            <option value="compound">Compound</option>
+                            <option value="isolation">Isolation</option>
+                            <option value="cardio">Cardio</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-exercise-muscle">Primary Muscle</label>
+                        <select id="new-exercise-muscle">
+                            <option value="chest">Chest</option>
+                            <option value="back">Back</option>
+                            <option value="shoulders">Shoulders</option>
+                            <option value="biceps">Biceps</option>
+                            <option value="triceps">Triceps</option>
+                            <option value="quads">Quads</option>
+                            <option value="hamstrings">Hamstrings</option>
+                            <option value="glutes">Glutes</option>
+                            <option value="calves">Calves</option>
+                            <option value="core">Core</option>
+                            <option value="full-body">Full Body</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Set Editor Modal -->
+            <section id="set-editor" class="view modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button class="back-btn" onclick="closeSetEditor()">Cancel</button>
+                        <h2 id="set-editor-title">Edit Sets</h2>
+                        <button class="save-btn" onclick="saveSets()">Done</button>
+                    </div>
+                    <div id="sets-container" class="sets-list"></div>
+                    <button class="full-width-btn" onclick="addSetToEditor()">+ Add Set</button>
+                </div>
+            </section>
+
+            <!-- Active Workout View -->
+            <section id="workout-view" class="view">
+                <div id="no-active-workout" class="empty-state-container">
+                    <p>No active workout.</p>
+                    <p>Start a workout from your planned workouts or create a quick session.</p>
+                    <button class="primary-btn" onclick="showQuickStartOptions()">Quick Start</button>
+                </div>
+                <div id="active-workout" class="hidden">
+                    <div class="workout-header">
+                        <h2 id="active-workout-name">Workout</h2>
+                        <div class="workout-timer">
+                            <span id="workout-duration">00:00:00</span>
+                        </div>
+                    </div>
+                    <div id="active-exercises" class="exercise-log-list"></div>
+                    <div class="workout-actions">
+                        <button class="secondary-btn" onclick="addExerciseToActive()">+ Add Exercise</button>
+                        <button class="primary-btn" onclick="finishWorkout()">Finish Workout</button>
+                        <button class="danger-btn" onclick="cancelWorkout()">Cancel</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Quick Start Modal -->
+            <section id="quick-start-modal" class="view modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button class="back-btn" onclick="closeQuickStart()">Cancel</button>
+                        <h2>Start Workout</h2>
+                    </div>
+                    <div class="section">
+                        <h3>From Template</h3>
+                        <div id="quick-start-templates" class="workout-list"></div>
+                    </div>
+                    <div class="section">
+                        <h3>Empty Workout</h3>
+                        <button class="full-width-btn" onclick="startEmptyWorkout()">Start Empty Workout</button>
+                    </div>
+                    <div class="section">
+                        <h3>Log Past Workout</h3>
+                        <button class="full-width-btn" onclick="openPastSessionForm(); closeQuickStart();">Add Past Session</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Past Session Form -->
+            <section id="past-session-form" class="view modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button class="back-btn" onclick="closePastSessionForm()">Cancel</button>
+                        <h2>Log Past Workout</h2>
+                        <button class="save-btn" onclick="savePastSession()">Save</button>
+                    </div>
+                    <div class="form-group">
+                        <label for="past-session-name">Workout Name</label>
+                        <input type="text" id="past-session-name" placeholder="e.g., Push Day">
+                    </div>
+                    <div class="form-group">
+                        <label for="past-session-date">Date</label>
+                        <input type="date" id="past-session-date">
+                    </div>
+                    <div class="form-group">
+                        <label for="past-session-duration">Duration (optional)</label>
+                        <div class="duration-inputs">
+                            <input type="number" id="past-session-hours" placeholder="0" min="0" max="23">
+                            <span>h</span>
+                            <input type="number" id="past-session-minutes" placeholder="0" min="0" max="59">
+                            <span>m</span>
+                        </div>
+                    </div>
+                    <div class="section">
+                        <div class="section-header">
+                            <h3>Exercises</h3>
+                            <button class="add-btn" onclick="showPastSessionExercisePicker()">+ Add</button>
+                        </div>
+                        <div id="past-session-exercises" class="exercise-list">
+                            <p class="empty-state">No exercises added yet.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Past Session Set Editor -->
+            <section id="past-set-editor" class="view modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button class="back-btn" onclick="closePastSetEditor()">Back</button>
+                        <h2 id="past-set-editor-title">Edit Sets</h2>
+                        <button class="save-btn" onclick="savePastSets()">Done</button>
+                    </div>
+                    <div class="set-labels">
+                        <span>Set</span>
+                        <span>Reps</span>
+                        <span>Weight (lbs)</span>
+                        <span></span>
+                    </div>
+                    <div id="past-sets-container" class="sets-list"></div>
+                    <button class="full-width-btn" onclick="addPastSet()">+ Add Set</button>
+                </div>
+            </section>
+
+            <!-- Progress View -->
+            <section id="progress-view" class="view">
+                <div class="form-group">
+                    <label for="progress-exercise">Select Exercise</label>
+                    <select id="progress-exercise" onchange="updateProgressChart()">
+                        <option value="">-- Select --</option>
+                    </select>
+                </div>
+                <div class="chart-container">
+                    <canvas id="progress-chart"></canvas>
+                </div>
+                <div id="progress-stats" class="progress-stats hidden">
+                    <div class="stat-row">
+                        <span class="stat-label">Best Weight:</span>
+                        <span id="best-weight" class="stat-value">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Best Volume (single session):</span>
+                        <span id="best-volume" class="stat-value">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Total Sets Logged:</span>
+                        <span id="total-sets" class="stat-value">-</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- PRs View -->
+            <section id="prs-view" class="view">
+                <div class="filter-tabs">
+                    <button class="tab active" data-filter="all" onclick="filterPRs('all')">All</button>
+                    <button class="tab" data-filter="compound" onclick="filterPRs('compound')">Compound</button>
+                    <button class="tab" data-filter="isolation" onclick="filterPRs('isolation')">Isolation</button>
+                </div>
+                <div id="all-prs" class="pr-grid">
+                    <p class="empty-state">No PRs recorded yet.</p>
+                </div>
+            </section>
+
+            <!-- Exercises View -->
+            <section id="exercises-view" class="view">
+                <input type="text" id="exercises-search" placeholder="Search exercises..." oninput="filterExercisesList()">
+                <div id="exercises-list" class="exercise-list"></div>
+            </section>
+
+            <!-- Settings View -->
+            <section id="settings-view" class="view">
+                <div class="settings-section">
+                    <h3>Account</h3>
+                    <div class="settings-item">
+                        <span>Signed in as</span>
+                        <span id="user-email" class="settings-value">-</span>
+                    </div>
+                    <button class="secondary-btn" onclick="signOut()" style="margin-top: 12px;">Sign Out</button>
+                </div>
+                <div class="settings-section">
+                    <h3>Data</h3>
+                    <p class="settings-note">Your data syncs automatically across all devices.</p>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom Navigation -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-view="dashboard">
+                <svg viewBox="0 0 24 24" class="nav-icon"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+                <span>Home</span>
+            </button>
+            <button class="nav-item" data-view="plan">
+                <svg viewBox="0 0 24 24" class="nav-icon"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+                <span>Plan</span>
+            </button>
+            <button class="nav-item" data-view="workout">
+                <svg viewBox="0 0 24 24" class="nav-icon"><path d="M20.57 14.86L22 13.43 20.57 12 17 15.57 8.43 7 12 3.43 10.57 2 9.14 3.43 7.71 2 5.57 4.14 4.14 2.71 2.71 4.14l1.43 1.43L2 7.71l1.43 1.43L2 10.57 3.43 12 7 8.43 15.57 17 12 20.57 13.43 22l1.43-1.43L16.29 22l2.14-2.14 1.43 1.43 1.43-1.43-1.43-1.43L22 16.29z"/></svg>
+                <span>Workout</span>
+            </button>
+            <button class="nav-item" data-view="progress">
+                <svg viewBox="0 0 24 24" class="nav-icon"><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>
+                <span>Progress</span>
+            </button>
+            <button class="nav-item" data-view="prs">
+                <svg viewBox="0 0 24 24" class="nav-icon"><path d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/></svg>
+                <span>PRs</span>
+            </button>
+            <button class="nav-item" data-view="settings">
+                <svg viewBox="0 0 24 24" class="nav-icon"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                <span>Settings</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
