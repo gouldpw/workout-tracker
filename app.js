@@ -260,14 +260,45 @@ async function getPRs() {
         .collection('prs').get();
     const prs = {};
     snapshot.docs.forEach(doc => {
-        prs[doc.id] = doc.data().records || [];
+        const data = doc.data();
+        // Migrate from old per-rep-count array format to new 3-type format
+        if (Array.isArray(data.records)) {
+            let maxWeight = null, max5RepWeight = null, maxVolumeSet = null;
+            data.records.forEach(r => {
+                if (!maxWeight || r.weight > maxWeight.weight)
+                    maxWeight = { weight: r.weight, reps: r.reps, date: r.date };
+                if (r.reps >= 5 && (!max5RepWeight || r.weight > max5RepWeight.weight))
+                    max5RepWeight = { weight: r.weight, reps: r.reps, date: r.date };
+                const vol = r.weight * r.reps;
+                if (!maxVolumeSet || vol > maxVolumeSet.volume)
+                    maxVolumeSet = { weight: r.weight, reps: r.reps, volume: vol, date: r.date };
+            });
+            prs[doc.id] = { maxWeight, max5RepWeight, maxVolumeSet };
+        } else {
+            prs[doc.id] = {
+                maxWeight: data.maxWeight || null,
+                max5RepWeight: data.max5RepWeight || null,
+                maxVolumeSet: data.maxVolumeSet || null
+            };
+        }
     });
     return prs;
 }
 
-async function savePRs(exerciseId, records) {
+async function savePRs(exerciseId, prData) {
     await db.collection('users').doc(currentUser.uid)
-        .collection('prs').doc(exerciseId).set({ records });
+        .collection('prs').doc(exerciseId).set(prData);
+}
+
+async function getSettings() {
+    const doc = await db.collection('users').doc(currentUser.uid)
+        .collection('state').doc('settings').get();
+    return doc.exists ? doc.data() : { restTimerDuration: 90, restTimerSound: true };
+}
+
+async function saveSettings(settings) {
+    await db.collection('users').doc(currentUser.uid)
+        .collection('state').doc('settings').set(settings);
 }
 
 async function getActiveWorkout() {
@@ -300,6 +331,15 @@ let workoutTimerInterval = null;
 let pastSessionExercises = [];
 let pastEditingExerciseIndex = null;
 let pastEditingSets = [];
+
+// Settings & rest timer state
+let userSettings = { restTimerDuration: 90, restTimerSound: true };
+let restTimerInterval = null;
+let restTimerRemaining = 0;
+let restTimerTotal = 0;
+
+// Hevy import state
+let hevyImportData = null;
 
 // ==================== NAVIGATION ====================
 
@@ -340,6 +380,9 @@ function navigateTo(view) {
     if (view === 'plan') {
         headerAction.classList.remove('hidden');
         headerAction.onclick = () => openWorkoutEditor();
+    } else if (view === 'exercises') {
+        headerAction.classList.remove('hidden');
+        headerAction.onclick = () => openNewExerciseForm();
     } else {
         headerAction.classList.add('hidden');
     }
@@ -370,6 +413,9 @@ async function refreshView(view) {
         case 'exercises':
             await renderExercisesList();
             break;
+        case 'settings':
+            populateSettingsView();
+            break;
     }
 }
 
@@ -396,16 +442,20 @@ async function renderDashboard() {
     }, 0);
     document.getElementById('total-volume').textContent = formatNumber(totalVolume);
 
-    const prCount = Object.values(prs).reduce((sum, exPrs) => sum + exPrs.length, 0);
+    const prCount = Object.values(prs).reduce((sum, exData) => {
+        if (!exData) return sum;
+        return sum + (exData.maxWeight ? 1 : 0) + (exData.max5RepWeight ? 1 : 0) + (exData.maxVolumeSet ? 1 : 0);
+    }, 0);
     document.getElementById('total-prs').textContent = prCount;
 
-    // Recent PRs
+    // Recent PRs — collect all 3 types, sort by date, show latest 3
     const recentPRsContainer = document.getElementById('recent-prs');
     const allPRsList = [];
-    Object.entries(prs).forEach(([exerciseId, exPrs]) => {
-        exPrs.forEach(pr => {
-            allPRsList.push({ exerciseId, ...pr });
-        });
+    Object.entries(prs).forEach(([exerciseId, exData]) => {
+        if (!exData) return;
+        if (exData.maxWeight) allPRsList.push({ exerciseId, label: '1RM', ...exData.maxWeight });
+        if (exData.max5RepWeight) allPRsList.push({ exerciseId, label: '5RM', ...exData.max5RepWeight });
+        if (exData.maxVolumeSet) allPRsList.push({ exerciseId, label: 'Vol', ...exData.maxVolumeSet });
     });
     allPRsList.sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -415,11 +465,14 @@ async function renderDashboard() {
         const exercises = await getExercises();
         recentPRsContainer.innerHTML = allPRsList.slice(0, 3).map(pr => {
             const exercise = exercises.find(e => e.id === pr.exerciseId);
+            const valueStr = pr.label === 'Vol'
+                ? `${pr.weight} × ${pr.reps} = ${formatNumber(pr.volume)} lbs`
+                : `${pr.weight} lbs × ${pr.reps} (${pr.label})`;
             return `
                 <div class="pr-card">
                     <span class="exercise-name">${exercise?.name || pr.exerciseId}</span>
                     <div class="pr-details">
-                        <span class="pr-value">${pr.weight} lbs x ${pr.reps}</span>
+                        <span class="pr-value">${valueStr}</span>
                         <span class="pr-date">${formatDate(pr.date)}</span>
                     </div>
                 </div>
@@ -761,6 +814,7 @@ async function saveNewExercise() {
 
     closeNewExerciseForm();
     await renderExerciseOptions();
+    if (currentView === 'exercises') await renderExercisesList();
     showToast('Exercise added!', 'success');
 }
 
@@ -965,6 +1019,10 @@ async function toggleSetComplete(exerciseIndex, setIndex) {
 
     await saveActiveWorkout(active);
     await renderActiveExercises(active);
+
+    if (set.completed) {
+        startRestTimer();
+    }
 }
 
 async function addSetToActive(exerciseIndex) {
@@ -1026,6 +1084,7 @@ async function finishWorkout() {
     await checkAndUpdatePRs(session);
     await clearActiveWorkout();
     stopWorkoutTimer();
+    skipRestTimer();
 
     showToast('Workout complete!', 'success');
     navigateTo('dashboard');
@@ -1036,6 +1095,7 @@ async function cancelWorkout() {
 
     await clearActiveWorkout();
     stopWorkoutTimer();
+    skipRestTimer();
     navigateTo('dashboard');
 }
 
@@ -1044,28 +1104,41 @@ async function checkAndUpdatePRs(session, silent = false) {
     let newPRs = 0;
 
     for (const exercise of (session.exercises || [])) {
-        if (!prs[exercise.exerciseId]) {
-            prs[exercise.exerciseId] = [];
-        }
+        const exId = exercise.exerciseId;
+        if (!prs[exId]) prs[exId] = { maxWeight: null, max5RepWeight: null, maxVolumeSet: null };
+
+        const exPRs = prs[exId];
+        let changed = false;
 
         for (const set of (exercise.sets || [])) {
-            if (!set.weight || !set.reps) continue;
+            if (!set.reps) continue;
+            const weight = set.weight || 0;
+            const volume = weight * set.reps;
 
-            const existingPR = prs[exercise.exerciseId].find(pr => pr.reps === set.reps);
+            // 1RM: highest weight for any set (≥1 rep)
+            if (!exPRs.maxWeight || weight > exPRs.maxWeight.weight) {
+                exPRs.maxWeight = { weight, reps: set.reps, date: session.date };
+                changed = true;
+                newPRs++;
+            }
 
-            if (!existingPR || set.weight > existingPR.weight) {
-                prs[exercise.exerciseId] = prs[exercise.exerciseId].filter(pr => pr.reps !== set.reps);
-                prs[exercise.exerciseId].push({
-                    weight: set.weight,
-                    reps: set.reps,
-                    date: session.date
-                });
+            // 5RM: highest weight for a set of ≥5 reps
+            if (set.reps >= 5 && (!exPRs.max5RepWeight || weight > exPRs.max5RepWeight.weight)) {
+                exPRs.max5RepWeight = { weight, reps: set.reps, date: session.date };
+                changed = true;
+                newPRs++;
+            }
+
+            // Best volume set: highest weight × reps for a single set
+            if (!exPRs.maxVolumeSet || volume > exPRs.maxVolumeSet.volume) {
+                exPRs.maxVolumeSet = { weight, reps: set.reps, volume, date: session.date };
+                changed = true;
                 newPRs++;
             }
         }
 
-        if (prs[exercise.exerciseId].length > 0) {
-            await savePRs(exercise.exerciseId, prs[exercise.exerciseId]);
+        if (changed) {
+            await savePRs(exId, exPRs);
         }
     }
 
@@ -1497,56 +1570,61 @@ async function renderAllPRs(filter = 'all') {
     const exercises = await getExercises();
     const container = document.getElementById('all-prs');
 
-    let allPRs = [];
-    Object.entries(prs).forEach(([exerciseId, exPrs]) => {
+    // Collect exercises that have any PR data, applying category filter
+    const exercisesWithPRs = Object.entries(prs).filter(([exerciseId, exData]) => {
+        if (!exData || (!exData.maxWeight && !exData.max5RepWeight && !exData.maxVolumeSet)) return false;
         const exercise = exercises.find(e => e.id === exerciseId);
-        if (filter !== 'all' && exercise?.category !== filter) return;
-
-        exPrs.forEach(pr => {
-            allPRs.push({
-                exerciseId,
-                exerciseName: exercise?.name || exerciseId,
-                muscle: exercise?.muscle || '',
-                ...pr
-            });
-        });
+        if (filter !== 'all' && exercise?.category !== filter) return false;
+        return true;
     });
 
-    allPRs.sort((a, b) => {
-        const dateCompare = new Date(b.date) - new Date(a.date);
-        if (dateCompare !== 0) return dateCompare;
-        return a.exerciseName.localeCompare(b.exerciseName);
-    });
-
-    if (allPRs.length === 0) {
+    if (exercisesWithPRs.length === 0) {
         container.innerHTML = '<p class="empty-state">No PRs recorded yet.</p>';
         return;
     }
 
-    const grouped = {};
-    allPRs.forEach(pr => {
-        if (!grouped[pr.exerciseId]) {
-            grouped[pr.exerciseId] = {
-                name: pr.exerciseName,
-                muscle: pr.muscle,
-                prs: []
-            };
-        }
-        grouped[pr.exerciseId].prs.push(pr);
+    // Sort by most recent PR date across all 3 types
+    exercisesWithPRs.sort(([, a], [, b]) => {
+        const latestDate = exData => {
+            const dates = [exData.maxWeight?.date, exData.max5RepWeight?.date, exData.maxVolumeSet?.date]
+                .filter(Boolean).map(d => new Date(d));
+            return dates.length ? Math.max(...dates) : 0;
+        };
+        return latestDate(b) - latestDate(a);
     });
 
-    container.innerHTML = Object.entries(grouped).map(([id, data]) => {
-        const bestPR = data.prs.reduce((best, pr) => pr.weight > best.weight ? pr : best);
+    container.innerHTML = exercisesWithPRs.map(([exerciseId, exData]) => {
+        const exercise = exercises.find(e => e.id === exerciseId);
+        const name = exercise?.name || exerciseId;
+        const muscle = exercise?.muscle || '';
+
+        const prRow = (label, data) => {
+            if (!data) return `
+                <div class="pr-type-row empty">
+                    <span class="pr-type-label">${label}</span>
+                    <span class="pr-value">—</span>
+                    <span class="pr-date"></span>
+                </div>`;
+            const valueStr = label === 'Best Set'
+                ? `${data.weight} × ${data.reps} = ${formatNumber(data.volume)} lbs`
+                : `${data.weight} lbs × ${data.reps}`;
+            return `
+                <div class="pr-type-row">
+                    <span class="pr-type-label">${label}</span>
+                    <span class="pr-value">${valueStr}</span>
+                    <span class="pr-date">${formatDate(data.date)}</span>
+                </div>`;
+        };
+
         return `
-            <div class="pr-card">
-                <div>
-                    <span class="exercise-name">${data.name}</span>
-                    <span class="muscle" style="display: block; font-size: 0.8rem; color: var(--text-muted);">${data.muscle}</span>
+            <div class="pr-card pr-card-expanded">
+                <div class="pr-card-header">
+                    <span class="exercise-name">${name}</span>
+                    <span class="muscle" style="font-size:0.8rem;color:var(--text-muted)">${muscle}</span>
                 </div>
-                <div class="pr-details">
-                    <span class="pr-value">${bestPR.weight} lbs x ${bestPR.reps}</span>
-                    <span class="pr-date">${formatDate(bestPR.date)}</span>
-                </div>
+                ${prRow('1RM', exData.maxWeight)}
+                ${prRow('5RM', exData.max5RepWeight)}
+                ${prRow('Best Set', exData.maxVolumeSet)}
             </div>
         `;
     }).join('');
@@ -1630,6 +1708,7 @@ function showToast(message, type = 'info') {
 
 async function initApp() {
     initNavigation();
+    userSettings = await getSettings();
 
     const active = await getActiveWorkout();
     if (active) {
@@ -1637,6 +1716,308 @@ async function initApp() {
     } else {
         await renderDashboard();
     }
+}
+
+// ==================== SETTINGS ====================
+
+function populateSettingsView() {
+    document.getElementById('settings-rest-duration').value = userSettings.restTimerDuration || 90;
+    document.getElementById('settings-rest-sound').checked = userSettings.restTimerSound !== false;
+}
+
+async function saveTimerSettings() {
+    const duration = parseInt(document.getElementById('settings-rest-duration').value) || 90;
+    const sound = document.getElementById('settings-rest-sound').checked;
+
+    userSettings.restTimerDuration = Math.max(10, Math.min(600, duration));
+    userSettings.restTimerSound = sound;
+
+    await saveSettings(userSettings);
+    showToast('Settings saved!', 'success');
+}
+
+// ==================== REST TIMER ====================
+
+function startRestTimer() {
+    stopRestTimer();
+    restTimerTotal = userSettings.restTimerDuration || 90;
+    restTimerRemaining = restTimerTotal;
+
+    const banner = document.getElementById('rest-timer-banner');
+    banner.classList.remove('hidden');
+    document.getElementById('rest-timer-skip').textContent = 'Skip';
+    updateRestTimerDisplay();
+
+    restTimerInterval = setInterval(() => {
+        restTimerRemaining--;
+        updateRestTimerDisplay();
+
+        if (restTimerRemaining <= 0) {
+            clearInterval(restTimerInterval);
+            restTimerInterval = null;
+            if (userSettings.restTimerSound !== false) playRestTimerSound();
+            document.getElementById('rest-timer-skip').textContent = 'Done';
+        }
+    }, 1000);
+}
+
+function stopRestTimer() {
+    if (restTimerInterval) {
+        clearInterval(restTimerInterval);
+        restTimerInterval = null;
+    }
+}
+
+function skipRestTimer() {
+    stopRestTimer();
+    const banner = document.getElementById('rest-timer-banner');
+    if (banner) banner.classList.add('hidden');
+    restTimerRemaining = 0;
+}
+
+function updateRestTimerDisplay() {
+    const display = document.getElementById('rest-timer-display');
+    if (!display) return;
+
+    const secs = Math.max(0, restTimerRemaining);
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    display.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+
+    const bar = document.getElementById('rest-timer-bar');
+    if (bar && restTimerTotal > 0) {
+        bar.style.width = `${(secs / restTimerTotal) * 100}%`;
+    }
+}
+
+function playRestTimerSound() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        [0, 0.15, 0.3].forEach(offset => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.frequency.value = 880;
+            gain.gain.setValueAtTime(0.3, ctx.currentTime + offset);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + offset + 0.12);
+            osc.start(ctx.currentTime + offset);
+            osc.stop(ctx.currentTime + offset + 0.12);
+        });
+    } catch (e) {}
+}
+
+// ==================== RECALCULATE PRs ====================
+
+async function recalculatePRs() {
+    if (!confirm('Recalculate all PRs from session history? Current PR records will be replaced.')) return;
+
+    showToast('Recalculating...', 'info');
+
+    // Clear all existing PR records
+    const snapshot = await db.collection('users').doc(currentUser.uid).collection('prs').get();
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+
+    // Recompute from all sessions in chronological order
+    const sessions = await getSessions();
+    sessions.sort((a, b) => new Date(a.date) - new Date(b.date));
+    for (const session of sessions) {
+        await checkAndUpdatePRs(session, true);
+    }
+
+    showToast('PRs recalculated!', 'success');
+    await renderAllPRs();
+}
+
+// ==================== HEVY CSV IMPORT ====================
+
+function parseCSV(text) {
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split('\n');
+    if (lines.length < 2) return [];
+
+    const headers = parseCSVLine(lines[0]);
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+        const values = parseCSVLine(lines[i]);
+        if (values.every(v => !v.trim())) continue;
+        const row = {};
+        headers.forEach((h, idx) => { row[h.trim()] = (values[idx] || '').trim(); });
+        rows.push(row);
+    }
+    return rows;
+}
+
+function parseCSVLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+            if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+            else inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+            result.push(current);
+            current = '';
+        } else {
+            current += char;
+        }
+    }
+    result.push(current);
+    return result;
+}
+
+async function previewHevyImport(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const text = await file.text();
+    const rows = parseCSV(text);
+
+    if (rows.length === 0 || !rows[0].hasOwnProperty('exercise_title')) {
+        showToast('Invalid Hevy CSV format', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    // Group rows into workouts by title + start_time
+    const workoutsMap = new Map();
+    rows.forEach(row => {
+        const reps = parseInt(row.reps) || 0;
+        if (reps === 0) return; // skip non-rep sets (distance/timed)
+
+        const key = `${row.title}||${row.start_time}`;
+        if (!workoutsMap.has(key)) {
+            workoutsMap.set(key, {
+                name: row.title || 'Imported Workout',
+                startTime: row.start_time,
+                endTime: row.end_time,
+                exercises: new Map()
+            });
+        }
+        const workout = workoutsMap.get(key);
+        const exName = row.exercise_title;
+        if (!exName) return;
+
+        if (!workout.exercises.has(exName)) workout.exercises.set(exName, []);
+        workout.exercises.get(exName).push({
+            reps,
+            weightLbs: Math.round((parseFloat(row.weight_kg) || 0) * 2.20462 * 10) / 10
+        });
+    });
+
+    const workouts = Array.from(workoutsMap.values());
+    if (workouts.length === 0) {
+        showToast('No workouts found in CSV', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    // Find new exercises
+    const existingExercises = await getExercises();
+    const allExerciseNames = new Set();
+    workouts.forEach(w => w.exercises.forEach((_, name) => allExerciseNames.add(name)));
+    const newExerciseNames = Array.from(allExerciseNames).filter(
+        name => !existingExercises.find(e => e.name.toLowerCase() === name.toLowerCase())
+    );
+
+    // Date range
+    const dates = workouts.map(w => new Date(w.startTime.replace(' ', 'T'))).filter(d => !isNaN(d));
+    const minDate = dates.length ? new Date(Math.min(...dates)) : null;
+    const maxDate = dates.length ? new Date(Math.max(...dates)) : null;
+    const dateRange = minDate && maxDate
+        ? `${formatShortDate(minDate)} – ${formatShortDate(maxDate)}`
+        : 'Unknown dates';
+
+    const totalSets = workouts.reduce((sum, w) =>
+        sum + Array.from(w.exercises.values()).reduce((s, sets) => s + sets.length, 0), 0);
+
+    hevyImportData = workouts;
+
+    // Build preview HTML
+    const newExHtml = newExerciseNames.length > 0 ? `
+        <div class="import-new-exercises">
+            <h3>${newExerciseNames.length} New Exercise${newExerciseNames.length > 1 ? 's' : ''} to Create</h3>
+            <ul>${newExerciseNames.map(n => `<li>• ${n}</li>`).join('')}</ul>
+        </div>` : '';
+
+    document.getElementById('import-preview-content').innerHTML = `
+        <div class="import-summary">
+            <p><strong>${workouts.length}</strong> workouts found</p>
+            <p>Date range: <strong>${dateRange}</strong></p>
+            <p><strong>${allExerciseNames.size}</strong> exercises · <strong>${totalSets}</strong> total sets</p>
+        </div>
+        ${newExHtml}
+        <p class="import-warning">Importing again will create duplicate sessions. Use "Recalculate All PRs" in Settings after importing.</p>
+    `;
+
+    document.getElementById('import-preview-modal').classList.add('active');
+    event.target.value = '';
+}
+
+function closeImportPreview() {
+    document.getElementById('import-preview-modal').classList.remove('active');
+    hevyImportData = null;
+}
+
+async function confirmHevyImport() {
+    if (!hevyImportData) return;
+
+    const btn = document.querySelector('#import-preview-modal .save-btn');
+    btn.textContent = 'Importing...';
+    btn.disabled = true;
+
+    const existingExercises = await getExercises();
+    let imported = 0;
+
+    for (const workout of hevyImportData) {
+        const sessionExercises = [];
+
+        for (const [exName, sets] of workout.exercises) {
+            let exercise = existingExercises.find(e => e.name.toLowerCase() === exName.toLowerCase());
+
+            if (!exercise) {
+                const id = exName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+                exercise = { id, name: exName, category: 'compound', muscle: 'full-body' };
+                await addExercise(exercise);
+                existingExercises.push(exercise);
+            }
+
+            const validSets = sets.filter(s => s.reps > 0).map(s => ({
+                reps: s.reps,
+                weight: s.weightLbs,
+                completed: true
+            }));
+            if (validSets.length > 0) sessionExercises.push({ exerciseId: exercise.id, sets: validSets });
+        }
+
+        if (sessionExercises.length === 0) continue;
+
+        const startDate = new Date(workout.startTime.replace(' ', 'T'));
+        let duration = 0;
+        if (workout.endTime) {
+            duration = new Date(workout.endTime.replace(' ', 'T')) - startDate;
+        }
+
+        const session = {
+            workoutId: null,
+            name: workout.name,
+            date: startDate.toISOString(),
+            duration: Math.max(0, duration),
+            exercises: sessionExercises
+        };
+
+        await saveSession(session);
+        await checkAndUpdatePRs(session, true);
+        imported++;
+    }
+
+    closeImportPreview();
+    showToast(`Imported ${imported} workout${imported !== 1 ? 's' : ''}!`, 'success');
+    navigateTo('history');
 }
 
 // Start the app

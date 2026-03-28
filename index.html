@@ -356,11 +356,60 @@
                     <button class="secondary-btn" onclick="signOut()" style="margin-top: 12px;">Sign Out</button>
                 </div>
                 <div class="settings-section">
+                    <h3>Workout</h3>
+                    <div class="settings-item">
+                        <span>Rest Timer Duration</span>
+                        <div class="settings-duration-control">
+                            <input type="number" id="settings-rest-duration" min="10" max="600" value="90">
+                            <span>sec</span>
+                        </div>
+                    </div>
+                    <div class="settings-item">
+                        <span>Rest Timer Sound</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="settings-rest-sound" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <button class="secondary-btn" onclick="saveTimerSettings()" style="margin-top: 12px;">Save</button>
+                </div>
+                <div class="settings-section">
+                    <h3>Import Data</h3>
+                    <p class="settings-note">Import workout history from Hevy (CSV export).</p>
+                    <input type="file" id="hevy-import-file" accept=".csv" class="hidden" onchange="previewHevyImport(event)">
+                    <button class="secondary-btn" onclick="document.getElementById('hevy-import-file').click()" style="margin-top: 12px;">Import from Hevy (CSV)</button>
+                </div>
+                <div class="settings-section">
                     <h3>Data</h3>
                     <p class="settings-note">Your data syncs automatically across all devices.</p>
+                    <button class="secondary-btn" onclick="recalculatePRs()" style="margin-top: 8px;">Recalculate All PRs</button>
+                </div>
+            </section>
+
+            <!-- Hevy Import Preview Modal -->
+            <section id="import-preview-modal" class="view modal import-modal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button class="back-btn" onclick="closeImportPreview()">Cancel</button>
+                        <h2>Import Preview</h2>
+                        <button class="save-btn" onclick="confirmHevyImport()">Import</button>
+                    </div>
+                    <div id="import-preview-content"></div>
                 </div>
             </section>
         </main>
+
+        <!-- Rest Timer Banner -->
+        <div id="rest-timer-banner" class="rest-timer-banner hidden">
+            <div class="rest-timer-info">
+                <span class="rest-timer-label">Rest</span>
+                <span id="rest-timer-display" class="rest-timer-display">1:30</span>
+            </div>
+            <div class="rest-timer-progress">
+                <div id="rest-timer-bar" class="rest-timer-bar"></div>
+            </div>
+            <button id="rest-timer-skip" onclick="skipRestTimer()" class="rest-timer-skip-btn">Skip</button>
+        </div>
 
         <!-- Bottom Navigation -->
         <nav class="bottom-nav">
