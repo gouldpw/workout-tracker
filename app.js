@@ -337,6 +337,7 @@ let userSettings = { restTimerDuration: 90, restTimerSound: true };
 let restTimerInterval = null;
 let restTimerRemaining = 0;
 let restTimerTotal = 0;
+let restTimerEndTime = null;
 
 // Hevy import state
 let hevyImportData = null;
@@ -1741,24 +1742,26 @@ async function saveTimerSettings() {
 function startRestTimer() {
     stopRestTimer();
     restTimerTotal = userSettings.restTimerDuration || 90;
-    restTimerRemaining = restTimerTotal;
+    restTimerEndTime = Date.now() + restTimerTotal * 1000;
 
     const banner = document.getElementById('rest-timer-banner');
     banner.classList.remove('hidden');
     document.getElementById('rest-timer-skip').textContent = 'Skip';
     updateRestTimerDisplay();
 
-    restTimerInterval = setInterval(() => {
-        restTimerRemaining--;
-        updateRestTimerDisplay();
+    restTimerInterval = setInterval(tickRestTimer, 1000);
+}
 
-        if (restTimerRemaining <= 0) {
-            clearInterval(restTimerInterval);
-            restTimerInterval = null;
-            if (userSettings.restTimerSound !== false) playRestTimerSound();
-            document.getElementById('rest-timer-skip').textContent = 'Done';
-        }
-    }, 1000);
+function tickRestTimer() {
+    restTimerRemaining = Math.ceil((restTimerEndTime - Date.now()) / 1000);
+    updateRestTimerDisplay();
+
+    if (restTimerRemaining <= 0) {
+        clearInterval(restTimerInterval);
+        restTimerInterval = null;
+        if (userSettings.restTimerSound !== false) playRestTimerSound();
+        document.getElementById('rest-timer-skip').textContent = 'Done';
+    }
 }
 
 function stopRestTimer() {
@@ -1773,6 +1776,7 @@ function skipRestTimer() {
     const banner = document.getElementById('rest-timer-banner');
     if (banner) banner.classList.add('hidden');
     restTimerRemaining = 0;
+    restTimerEndTime = null;
 }
 
 function updateRestTimerDisplay() {
@@ -2019,6 +2023,15 @@ async function confirmHevyImport() {
     showToast(`Imported ${imported} workout${imported !== 1 ? 's' : ''}!`, 'success');
     navigateTo('history');
 }
+
+// Re-sync rest timer display when returning to the tab
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && restTimerEndTime !== null) {
+        if (restTimerInterval) {
+            tickRestTimer();
+        }
+    }
+});
 
 // Start the app
 document.addEventListener('DOMContentLoaded', initFirebase);
